@@ -13,6 +13,7 @@ func (s *Server) routes() {
 	s.router.Post("/api/campaign/transition", s.transition)
 	s.router.Post("/api/analyzer/samples", s.sample)
 	s.router.Post("/api/analyzer/calibrate", s.calibrate)
+	s.router.Get("/api/analyzer/trends", s.trends)
 	s.router.Post("/api/products/route", s.routeProduct)
 	s.router.Post("/api/reflux/leases", s.lease)
 	s.router.Post("/api/shutdown", s.shutdown)

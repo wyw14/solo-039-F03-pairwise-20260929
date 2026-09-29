@@ -6,43 +6,54 @@ import (
 	"sync"
 )
 
+// Window 同时承担两件事：
+//   - 当前段样本作为即时证明窗口（Complete/Samples 的既有语义不变）；
+//   - 底层 Trend 保留按缺测、重新校准、进料切换切开的历史段供时间趋势查询。
 type Window struct {
-	mu           sync.Mutex
-	samples      []model.Sample
-	calibration  uuid.UUID
-	feedRevision uuid.UUID
-	needed       int
-	maxGap       int64
+	mu     sync.Mutex
+	trend  *Trend
+	needed int
+	maxGap int64
 }
 
 func NewWindow() *Window {
-	return &Window{samples: make([]model.Sample, 0, 16), calibration: uuid.New(), needed: 3, maxGap: 60}
+	return &Window{trend: NewTrend(60), needed: 3, maxGap: 60}
 }
 
+// Reset 宣告新的校准/进料代际，关闭当前证明窗口；趋势旧段保留可查。
 func (w *Window) Reset(calibration, feedRevision uuid.UUID) {
 	w.mu.Lock()
-	w.samples = nil
-	w.calibration = calibration
-	w.feedRevision = feedRevision
+	reason := SegmentStart
+	if prevCalibration, prevFeed, ok := w.trend.LastSegmentIdentity(); ok {
+		switch {
+		case calibration != prevCalibration:
+			reason = SegmentCalibration
+		case feedRevision != prevFeed:
+			reason = SegmentFeed
+		}
+	}
+	w.trend.Begin(calibration, feedRevision, reason, 0)
 	w.mu.Unlock()
 }
 
 func (w *Window) Add(sample model.Sample) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !sample.Valid || sample.Calibration != w.calibration || sample.FeedRevision != w.feedRevision {
+	calibration, feedRevision := w.trend.Identity()
+	if !sample.Valid || sample.Calibration != calibration || sample.FeedRevision != feedRevision {
 		return false
 	}
-	if len(w.samples) > 0 {
-		last := w.samples[len(w.samples)-1]
-		if sample.At <= last.At {
-			return false
-		}
-		if sample.At-last.At > w.maxGap {
-			w.samples = w.samples[:0]
+	// 已宣告新代际（校准/进料切换）时，首条样本开启新段，不与旧段比较时间。
+	if !w.trend.Pending() {
+		if current, ok := w.trend.CurrentSegment(); ok && len(current.Samples) > 0 {
+			last := current.Samples[len(current.Samples)-1]
+			if sample.At <= last.At {
+				return false
+			}
 		}
 	}
-	w.samples = append(w.samples, sample)
+	// 与上一条样本间隔超过 maxGap 时，Trend 内部会先按缺测切段再收录。
+	w.trend.Add(sample)
 	return true
 }
 
@@ -54,19 +65,30 @@ func (w *Window) Configure(needed int, maxGap int64) {
 	}
 	if maxGap > 0 {
 		w.maxGap = maxGap
+		w.trend.Configure(maxGap)
 	}
 }
 
 func (w *Window) Identity() (uuid.UUID, uuid.UUID) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.calibration, w.feedRevision
+	return w.trend.Identity()
 }
 
-func (w *Window) Complete() bool { w.mu.Lock(); defer w.mu.Unlock(); return len(w.samples) >= w.needed }
+func (w *Window) Complete() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	current, ok := w.trend.CurrentSegment()
+	return ok && len(current.Samples) >= w.needed
+}
 
+// Samples 返回当前证明窗口（当前趋势段）的样本副本。
 func (w *Window) Samples() []model.Sample {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]model.Sample(nil), w.samples...)
+	current, ok := w.trend.CurrentSegment()
+	if !ok {
+		return []model.Sample{}
+	}
+	return append([]model.Sample(nil), current.Samples...)
 }
+
+func (w *Window) Trend() *Trend { return w.trend }

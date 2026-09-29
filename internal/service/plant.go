@@ -183,6 +183,32 @@ func (p *Plant) CalibrateAnalyzer() uuid.UUID {
 	return revision
 }
 
+// AnalyzerTrendQuery 是时间趋势查询：可按当前牌号覆盖限值并限定预警时间窗。
+type AnalyzerTrendQuery struct {
+	Component      string
+	Min            float64
+	Max            float64
+	HasMin         bool
+	HasMax         bool
+	HasLimit       bool
+	HorizonSeconds int64
+	MinSamples     int
+}
+
+// AnalyzerTrends 返回分段时间趋势与漂移越界预警（含支撑样本）。
+func (p *Plant) AnalyzerTrends(query AnalyzerTrendQuery) analyzer.Report {
+	stateQuery := analyzer.TrendQuery{Options: analyzer.ReportOptions{MinSamples: query.MinSamples, HorizonSeconds: query.HorizonSeconds}}
+	if query.HasLimit {
+		stateQuery.Limit = &analyzer.ComponentLimit{Component: query.Component, Min: query.Min, Max: query.Max, HasMin: query.HasMin, HasMax: query.HasMax}
+	}
+	return p.Analyzer.QueryTrend(stateQuery)
+}
+
+// ConfigureAnalyzerLimit 设置组分合格区间，供漂移外推使用；hasMin/hasMax 决定是否启用方向。
+func (p *Plant) ConfigureAnalyzerLimit(component string, min, max float64, hasMin, hasMax bool) {
+	p.Analyzer.ConfigureLimit(component, min, max, hasMin, hasMax)
+}
+
 func (p *Plant) RouteProduct(target string) error {
 	current := p.Campaign.Snapshot()
 	proof, ok := p.Analyzer.Proof(current.Revision)
@@ -284,7 +310,8 @@ func (p *Plant) Status() map[string]any {
 	lastError := p.lastError
 	p.mu.RUnlock()
 	gradient, _ := p.Profile.Gradient()
-	return map[string]any{"started": started, "last_error": lastError, "campaign": p.Campaign.Snapshot(), "column": p.Column.Snapshot(), "reflux_used": p.Reflux.Used(), "products": p.ProductTargets(), "relief": p.Relief.State.Snapshot(), "feed_metrics": p.FeedMetrics.Snapshot(), "reflux_telemetry": p.RefluxTelemetry.Snapshot(), "reboiler_telemetry": p.ReboilerTelemetry.Snapshot(), "product_decisions": p.ProductAudit.Count(), "utility_used": p.UtilityLedger.Used(), "metrics": p.Metrics.Snapshot(), "campaign_changes": p.CampaignHistory.Count(), "profile_gradient": gradient, "profile_stable": p.Profile.Stable(40), "evidence_count": p.Evidence.Count(p.Campaign.Snapshot().Revision.String()), "relief_attempts": p.ReliefHistory.Count(), "open_incidents": p.Incidents.CountOpen(), "operational_audit": p.OperationalAudit()}
+	trendReport := p.Analyzer.TrendReport()
+	return map[string]any{"started": started, "last_error": lastError, "campaign": p.Campaign.Snapshot(), "column": p.Column.Snapshot(), "reflux_used": p.Reflux.Used(), "products": p.ProductTargets(), "relief": p.Relief.State.Snapshot(), "feed_metrics": p.FeedMetrics.Snapshot(), "reflux_telemetry": p.RefluxTelemetry.Snapshot(), "reboiler_telemetry": p.ReboilerTelemetry.Snapshot(), "product_decisions": p.ProductAudit.Count(), "utility_used": p.UtilityLedger.Used(), "metrics": p.Metrics.Snapshot(), "campaign_changes": p.CampaignHistory.Count(), "profile_gradient": gradient, "profile_stable": p.Profile.Stable(40), "evidence_count": p.Evidence.Count(p.Campaign.Snapshot().Revision.String()), "relief_attempts": p.ReliefHistory.Count(), "open_incidents": p.Incidents.CountOpen(), "analyzer_trend_segments": len(trendReport.Segments), "analyzer_drift_warnings": trendReport.Warnings, "operational_audit": p.OperationalAudit()}
 }
 
 func (p *Plant) record(kind, payload string) error {

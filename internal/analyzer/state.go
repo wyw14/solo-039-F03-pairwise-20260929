@@ -12,13 +12,23 @@ type State struct {
 	window      *Window
 	last        model.Proof
 	online      bool
+	component   string
+	limit       ComponentLimit
+	report      ReportOptions
 }
 
 func New() *State {
 	calibration := uuid.New()
 	w := NewWindow()
 	w.Reset(calibration, uuid.Nil)
-	return &State{calibration: calibration, window: w, online: true}
+	return &State{
+		calibration: calibration,
+		window:      w,
+		online:      true,
+		component:   "top",
+		limit:       ComponentLimit{Component: "top", Max: 1, HasMax: true},
+		report:      DefaultReportOptions(),
+	}
 }
 
 func (s *State) SetOnline(value bool) { s.mu.Lock(); s.online = value; s.mu.Unlock() }
@@ -85,4 +95,82 @@ func (s *State) SampleCount() int {
 	window := s.window
 	s.mu.RUnlock()
 	return len(window.Samples())
+}
+
+// ConfigureLimit 设置组分合格区间；min/max 传 NaN 或 +Inf 可用 has 标志按需启用。
+func (s *State) ConfigureLimit(component string, min, max float64, hasMin, hasMax bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if component != "" {
+		s.component = component
+	}
+	s.limit = ComponentLimit{Component: s.component, Min: min, Max: max, HasMin: hasMin, HasMax: hasMax}
+}
+
+// ConfigureTrend 设置漂移外推参数（最少样本数、预警时间窗秒）。
+func (s *State) ConfigureTrend(minSamples int, horizonSeconds int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if minSamples > 0 {
+		s.report.MinSamples = minSamples
+	}
+	s.report.HorizonSeconds = horizonSeconds
+}
+
+// TrendReport 返回分段时间趋势、各段漂移速度与当前段越界预警（含支撑样本）。
+func (s *State) TrendReport() Report {
+	s.mu.RLock()
+	window := s.window
+	component := s.component
+	limit := s.limit
+	opts := s.report
+	s.mu.RUnlock()
+	return window.Trend().Report(component, limit, opts)
+}
+
+// TrendQuery 是时间趋势的查询参数；Limit 为 nil 时用已配置的组分限值。
+type TrendQuery struct {
+	Limit   *ComponentLimit
+	Options ReportOptions
+}
+
+// QueryTrend 按查询参数返回趋势；nil 字段回退到状态的默认配置。
+func (s *State) QueryTrend(query TrendQuery) Report {
+	s.mu.RLock()
+	window := s.window
+	component := s.component
+	limit := s.limit
+	opts := s.report
+	s.mu.RUnlock()
+	if query.Limit != nil {
+		limit = *query.Limit
+		if limit.Component != "" {
+			component = limit.Component
+		}
+	}
+	if query.Options.MinSamples > 0 {
+		opts.MinSamples = query.Options.MinSamples
+	}
+	if query.Options.HorizonSeconds > 0 {
+		opts.HorizonSeconds = query.Options.HorizonSeconds
+	}
+	return window.Trend().Report(component, limit, opts)
+}
+
+// TrendReportWith 在默认外推参数上叠加临时覆盖（如按查询限定预警时间窗）。
+func (s *State) TrendReportWith(overrides ReportOptions) Report {
+	return s.QueryTrend(TrendQuery{Options: overrides})
+}
+
+// Warnings 仅返回当前段的漂移越界预警。
+func (s *State) Warnings() []Warning {
+	return s.TrendReport().Warnings
+}
+
+// TrendSegments 返回全部趋势段（含已关闭段），供查询与审计。
+func (s *State) TrendSegments() []Segment {
+	s.mu.RLock()
+	window := s.window
+	s.mu.RUnlock()
+	return window.Trend().Segments()
 }
