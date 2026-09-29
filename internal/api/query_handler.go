@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/wyw14/solo-039/internal/journal"
 	"net/http"
+	"time"
 )
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
@@ -30,4 +31,8 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.plant.Metrics.Snapshot())
+}
+
+func (s *Server) analyzerTrends(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.plant.AnalyzerTrends(time.Now().Unix()))
 }

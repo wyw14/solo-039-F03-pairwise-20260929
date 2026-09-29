@@ -33,7 +33,11 @@ func (s *Server) sample(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "count": count})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"count": count})
+	response := map[string]any{"count": count}
+	if trends := s.plant.AnalyzerTrends(input.At); trends["warning_active"] == true {
+		response["warning"] = trends["warning"]
+	}
+	writeJSON(w, http.StatusAccepted, response)
 }
 
 func (s *Server) calibrate(w http.ResponseWriter, r *http.Request) {

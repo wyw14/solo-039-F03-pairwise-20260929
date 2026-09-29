@@ -177,6 +177,27 @@ func (p *Plant) AddSample(value float64, at int64) (int, error) {
 	return p.Analyzer.SampleCount(), nil
 }
 
+// AnalyzerTrends 返回可查询的采样时间趋势：按段组织，每段给出漂移速度与预计越界时间，
+// 以及当前段的预警（含支撑样本）。与即时证明流程互不影响。
+func (p *Plant) AnalyzerTrends(now int64) map[string]any {
+	book := p.Analyzer.Trends()
+	segments := book.Segments()
+	trends := book.Trends()
+	warning, warned := book.EvaluateWarning(now)
+	result := map[string]any{
+		"calibration":    p.Analyzer.Calibration(),
+		"config":         book.Config(),
+		"segment_count":  len(segments),
+		"segments":       segments,
+		"trends":         trends,
+		"warning_active": warned,
+	}
+	if warned {
+		result["warning"] = warning
+	}
+	return result
+}
+
 func (p *Plant) CalibrateAnalyzer() uuid.UUID {
 	revision := p.Analyzer.Calibrate()
 	p.Analyzer.BindFeed(p.Feed.Current.Revision)
